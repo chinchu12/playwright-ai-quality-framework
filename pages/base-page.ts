@@ -4,6 +4,7 @@ import { FailureContext } from '../ai/failure-context/failure-context';
 import { suggestHealing } from '../ai/healing/healing-engine';
 import { resolveHealingLocator } from '../ai/healing/locator-resolver';
 import { writeHealingAudit } from '../ai/reporting/healing-audit';
+import { classifyFailure } from '../ai/analysis/failure-classifier';
 
 export class BasePage {
   protected readonly page: Page;
@@ -42,6 +43,15 @@ export class BasePage {
         '\nCaptured failure context:\n',
         JSON.stringify(context, null, 2)
       );
+
+      const classification = await classifyFailure(context);
+
+      if (classification) {
+        console.log(
+          '\nFailure classification:\n',
+          JSON.stringify(classification, null, 2)
+        );
+      }
 
       const healingResult = await suggestHealing(context);
 
@@ -88,19 +98,25 @@ export class BasePage {
       try {
         await healedLocator.click({ timeout: 3000 });
 
-        writeHealingAudit(
-          context,
-          healingResult,
-          true
-        );
+        if (classification) {
+          writeHealingAudit(
+            context,
+            classification,
+            healingResult,
+            true
+          );
+        }
 
         console.log('\nSelf-healing succeeded.\n');
       } catch (healingError) {
-        writeHealingAudit(
-          context,
-          healingResult,
-          false
-        );
+        if (classification) {
+          writeHealingAudit(
+            context,
+            classification,
+            healingResult,
+            false
+          );
+        }
 
         console.log('\nSelf-healing retry failed.\n');
 
