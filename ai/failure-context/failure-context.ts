@@ -3,6 +3,11 @@ export interface InteractiveElement {
   role: string | null;
   text: string;
   ariaLabel: string | null;
+  id: string | null;
+  name: string | null;
+  type: string | null;
+  placeholder: string | null;
+  associatedLabel: string | null;
   href: string | null;
 }
 

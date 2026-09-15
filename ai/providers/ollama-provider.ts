@@ -14,35 +14,59 @@ You are a senior Playwright QA automation engineer.
 
 A Playwright locator failed.
 
-Your job is to identify the best replacement locator using ONLY the
-interactiveElements supplied in the failure context.
+Choose the best replacement element using ONLY the supplied
+interactiveElements.
 
-Return valid JSON with exactly this structure:
+IMPORTANT:
+You must return a usable Playwright role locator.
+
+For the "name" field use this priority:
+
+1. ariaLabel
+2. associatedLabel
+3. visible text
+4. placeholder
+
+For input elements:
+- use role "textbox" when type is text, email, search, tel, url, or password
+- if ariaLabel exists, use the ariaLabel as the locator name
+- do not return null for name
+
+Example:
+
+Interactive element:
 
 {
-  "originalLocator": "string",
+  "tag": "input",
+  "ariaLabel": "Product search",
+  "associatedLabel": "Find a product",
+  "placeholder": "Search catalogue"
+}
+
+Correct result:
+
+{
   "strategy": "role",
-  "role": "string",
-  "name": "string",
-  "confidence": 0.0,
-  "reason": "string"
+  "role": "textbox",
+  "name": "Product search"
 }
 
 Rules:
 
-1. Never invent an element or accessible name.
-2. The replacement must come from interactiveElements.
-3. Prefer ariaLabel over surrounding visible text when ariaLabel is present.
-4. For input elements, the accessible name is usually ariaLabel or associated label text.
-5. Do not reuse the failed accessible name unless it is actually present.
-6. Match the failed semantic role whenever possible.
-7. For:
-   - input -> role "textbox"
-   - button -> role "button"
-   - anchor -> role "link"
-8. Use confidence >= 0.90 only when the evidence is strong.
-9. If no reliable candidate exists, return confidence below 0.90.
-10. Return JSON only. No markdown.
+1. Never invent an element.
+2. Never invent an accessible name.
+3. Never return null or an empty string for "name".
+4. The proposed name must exist in interactiveElements.
+5. Prefer ariaLabel whenever it is available.
+6. Do not reuse the failed accessible name unless it exists in the DOM evidence.
+7. Match the semantic role of the failed action whenever possible.
+8. input -> textbox
+9. button -> button
+10. anchor -> link
+11. confidence must be between 0 and 1.
+12. Use confidence >= 0.90 only when the DOM evidence strongly supports the candidate.
+13. Return JSON only.
+14. Do not include markdown.
 
 Failure context:
 
@@ -54,13 +78,56 @@ ${JSON.stringify(context, null, 2)}
     headers: {
       'Content-Type': 'application/json',
     },
+
     body: JSON.stringify({
-    model: aiConfig.model,
+      model: aiConfig.model,
       prompt,
       stream: false,
 
-      // Ask Ollama to enforce JSON output
-      format: 'json',
+      format: {
+        type: 'object',
+
+        properties: {
+          originalLocator: {
+            type: 'string',
+          },
+
+          strategy: {
+            type: 'string',
+            enum: ['role'],
+          },
+
+          role: {
+            type: 'string',
+          },
+
+          name: {
+            type: 'string',
+            minLength: 1,
+          },
+
+          confidence: {
+            type: 'number',
+            minimum: 0,
+            maximum: 1,
+          },
+
+          reason: {
+            type: 'string',
+          },
+        },
+
+        required: [
+          'originalLocator',
+          'strategy',
+          'role',
+          'name',
+          'confidence',
+          'reason',
+        ],
+
+        additionalProperties: false,
+      },
 
       options: {
         temperature: 0,
@@ -77,27 +144,67 @@ ${JSON.stringify(context, null, 2)}
   const data = (await response.json()) as OllamaResponse;
 
   try {
-    // Extra protection if a model still adds markdown fences.
     const cleanedResponse = data.response
       .replace(/```json/gi, '')
       .replace(/```/g, '')
       .trim();
 
-    const healingResult = JSON.parse(cleanedResponse) as HealingResult;
+    const healingResult = JSON.parse(
+      cleanedResponse
+    ) as HealingResult;
 
-    // Safety check: do not accept an empty result.
     if (
       !healingResult.name ||
       !healingResult.role ||
       typeof healingResult.confidence !== 'number'
     ) {
-      console.error('\nIncomplete healing response:\n', healingResult);
+      console.error(
+        '\nIncomplete healing response:\n',
+        healingResult
+      );
+
+      return null;
+    }
+
+    // Guardrail:
+    // AI may only use a name that actually exists
+    // in the captured interactive DOM evidence.
+    const validNames = context.interactiveElements
+      .flatMap((element) => [
+        element.ariaLabel,
+        element.associatedLabel,
+        element.text,
+        element.placeholder,
+      ])
+      .filter(
+        (value): value is string =>
+          typeof value === 'string' &&
+          value.trim().length > 0
+      );
+
+    const proposedNameExists = validNames.some(
+      (name) =>
+        name.trim().toLowerCase() ===
+        healingResult.name.trim().toLowerCase()
+    );
+
+    if (!proposedNameExists) {
+      console.error(
+        `\nHealing rejected: AI proposed name "${healingResult.name}" but it does not exist in captured DOM evidence.\n`
+      );
+
       return null;
     }
 
     return healingResult;
-  } catch {
-    console.error('\nInvalid JSON returned by Ollama:\n', data.response);
+  } catch (error) {
+    console.error(
+      '\nInvalid JSON returned by Ollama:\n',
+      data.response
+    );
+
+    console.error(error);
+
     return null;
   }
 }

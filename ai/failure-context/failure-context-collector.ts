@@ -20,20 +20,52 @@ export async function collectFailureContext(
   const visibleText = await page.locator('body').innerText();
 
   const interactiveElements: InteractiveElement[] =
-    await page.locator('a, button, input, [role]').evaluateAll((elements) =>
-      elements.map((element) => {
-        const htmlElement = element as HTMLElement;
-        const anchor = element as HTMLAnchorElement;
+    await page
+      .locator('a, button, input, textarea, select, [role]')
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const htmlElement = element as HTMLElement;
+          const inputElement = element as HTMLInputElement;
+          const anchorElement = element as HTMLAnchorElement;
 
-        return {
-          tag: element.tagName.toLowerCase(),
-          role: element.getAttribute('role'),
-          text: htmlElement.innerText?.trim() ?? '',
-          ariaLabel: element.getAttribute('aria-label'),
-          href: anchor.href || null,
-        };
-      })
-    );
+          const id = element.getAttribute('id');
+
+          let associatedLabel: string | null = null;
+
+          if (id) {
+            const label = document.querySelector(
+              `label[for="${id}"]`
+            );
+
+            associatedLabel =
+              label?.textContent?.trim() ?? null;
+          }
+
+          return {
+            tag: element.tagName.toLowerCase(),
+            role: element.getAttribute('role'),
+            text: htmlElement.innerText?.trim() ?? '',
+            ariaLabel: element.getAttribute('aria-label'),
+            id,
+            name: element.getAttribute('name'),
+            type:
+              'type' in inputElement && inputElement.type
+                ? inputElement.type
+                : null,
+            placeholder:
+              'placeholder' in inputElement &&
+              inputElement.placeholder
+                ? inputElement.placeholder
+                : null,
+            associatedLabel,
+            href:
+              element.tagName.toLowerCase() === 'a' &&
+              anchorElement.href
+                ? anchorElement.href
+                : null,
+          };
+        })
+      );
 
   await page.screenshot({
     path: screenshotPath,
