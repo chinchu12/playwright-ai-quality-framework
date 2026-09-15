@@ -3,6 +3,7 @@ import { collectFailureContext } from '../ai/failure-context/failure-context-col
 import { FailureContext } from '../ai/failure-context/failure-context';
 import { suggestHealing } from '../ai/healing/healing-engine';
 import { resolveHealingLocator } from '../ai/healing/locator-resolver';
+import { writeHealingAudit } from '../ai/reporting/healing-audit';
 
 export class BasePage {
   protected readonly page: Page;
@@ -50,7 +51,8 @@ export class BasePage {
       }
 
       // Safety rule:
-      // Do not retry if AI returns the same broken locator name.
+      // Reject a healing suggestion that returns
+      // the same accessible name as the failed locator.
       if (
         context.locator &&
         context.locator.includes(`name: '${healingResult.name}'`)
@@ -67,7 +69,7 @@ export class BasePage {
         JSON.stringify(healingResult, null, 2)
       );
 
-      // Only retry high-confidence suggestions.
+      // Only retry high-confidence AI suggestions.
       if (healingResult.confidence < 0.9) {
         console.log(
           `\nHealing skipped because confidence ${healingResult.confidence} is below threshold 0.9.\n`
@@ -83,9 +85,27 @@ export class BasePage {
 
       console.log('\nHigh-confidence healing accepted. Retrying...\n');
 
-      await healedLocator.click({ timeout: 3000 });
+      try {
+        await healedLocator.click({ timeout: 3000 });
 
-      console.log('\nSelf-healing succeeded.\n');
+        writeHealingAudit(
+          context,
+          healingResult,
+          true
+        );
+
+        console.log('\nSelf-healing succeeded.\n');
+      } catch (healingError) {
+        writeHealingAudit(
+          context,
+          healingResult,
+          false
+        );
+
+        console.log('\nSelf-healing retry failed.\n');
+
+        throw healingError;
+      }
     }
   }
 
