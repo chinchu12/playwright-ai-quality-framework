@@ -12,60 +12,167 @@ export async function collectFailureContext(
   action?: string
 ): Promise<FailureContext> {
   const timestamp = new Date().toISOString();
-
   const screenshotPath = `test-results/failure-${Date.now()}.png`;
 
   const pageTitle = await page.title();
-
   const visibleText = await page.locator('body').innerText();
 
   const interactiveElements: InteractiveElement[] =
     await page
       .locator('a, button, input, textarea, select, [role]')
-      .evaluateAll((elements) =>
-        elements.map((element) => {
-          const htmlElement = element as HTMLElement;
-          const inputElement = element as HTMLInputElement;
-          const anchorElement = element as HTMLAnchorElement;
+      .evaluateAll((elements) => {
+        const candidates = elements
+          .map((element) => {
+            const htmlElement = element as HTMLElement;
+            const inputElement = element as HTMLInputElement;
+            const anchorElement = element as HTMLAnchorElement;
 
-          const id = element.getAttribute('id');
+            const id = element.getAttribute('id');
 
-          let associatedLabel: string | null = null;
+            let associatedLabel: string | null = null;
 
-          if (id) {
-            const label = document.querySelector(
-              `label[for="${id}"]`
-            );
+            if (id) {
+              const label = document.querySelector(
+                `label[for="${CSS.escape(id)}"]`
+              );
 
-            associatedLabel =
-              label?.textContent?.trim() ?? null;
-          }
+              associatedLabel =
+                label?.textContent?.trim() ?? null;
+            }
 
-          return {
-            tag: element.tagName.toLowerCase(),
-            role: element.getAttribute('role'),
-            text: htmlElement.innerText?.trim() ?? '',
-            ariaLabel: element.getAttribute('aria-label'),
-            id,
-            name: element.getAttribute('name'),
-            type:
+            const text =
+              htmlElement.innerText?.trim() ?? '';
+
+            const ariaLabel =
+              element.getAttribute('aria-label');
+
+            const name =
+              element.getAttribute('name');
+
+            const role =
+              element.getAttribute('role');
+
+            const type =
               'type' in inputElement && inputElement.type
                 ? inputElement.type
-                : null,
-            placeholder:
+                : null;
+
+            const placeholder =
               'placeholder' in inputElement &&
               inputElement.placeholder
                 ? inputElement.placeholder
-                : null,
-            associatedLabel,
-            href:
+                : null;
+
+            const href =
               element.tagName.toLowerCase() === 'a' &&
               anchorElement.href
                 ? anchorElement.href
-                : null,
-          };
-        })
-      );
+                : null;
+
+            return {
+              tag: element.tagName.toLowerCase(),
+              role,
+              text,
+              ariaLabel,
+              id,
+              name,
+              type,
+              placeholder,
+              associatedLabel,
+              href,
+            };
+          })
+          .filter((element) => {
+            const hasUsefulEvidence =
+              Boolean(element.ariaLabel) ||
+              Boolean(element.associatedLabel) ||
+              Boolean(element.text) ||
+              Boolean(element.placeholder) ||
+              Boolean(element.name) ||
+              Boolean(element.id);
+
+            if (!hasUsefulEvidence) {
+              return false;
+            }
+
+            const isInteractiveTag = [
+              'a',
+              'button',
+              'input',
+              'textarea',
+              'select',
+            ].includes(element.tag);
+
+            const hasMeaningfulRole =
+              element.role !== null &&
+              element.role !== 'none' &&
+              element.role !== 'presentation';
+
+            return (
+              isInteractiveTag ||
+              hasMeaningfulRole
+            );
+          });
+
+        const scoreCandidate = (
+          element: InteractiveElement
+        ): number => {
+          let score = 0;
+
+          if (element.ariaLabel) {
+            score += 5;
+          }
+
+          if (element.associatedLabel) {
+            score += 4;
+          }
+
+          if (element.placeholder) {
+            score += 3;
+          }
+
+          if (element.text) {
+            score += 3;
+          }
+
+          if (element.role) {
+            score += 2;
+          }
+
+          if (element.name) {
+            score += 2;
+          }
+
+          if (element.id) {
+            score += 1;
+          }
+
+          if (
+            element.tag === 'input' ||
+            element.tag === 'textarea'
+          ) {
+            score += 2;
+          }
+
+          if (element.tag === 'button') {
+            score += 1;
+          }
+
+          if (element.tag === 'a') {
+            score += 1;
+          }
+
+          return score;
+        };
+
+        return candidates
+          .sort(
+            (a, b) =>
+              scoreCandidate(b) -
+              scoreCandidate(a)
+          )
+          .slice(0, 30);
+      });
 
   await page.screenshot({
     path: screenshotPath,
