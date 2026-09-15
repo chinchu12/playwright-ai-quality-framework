@@ -6,6 +6,7 @@ import { resolveHealingLocator } from '../ai/healing/locator-resolver';
 import { writeHealingAudit } from '../ai/reporting/healing-audit';
 import { classifyFailure } from '../ai/analysis/failure-classifier';
 import { writeIncidentReport } from '../ai/reporting/incident-reporter';
+import { aiConfig } from '../config/ai-config';
 
 export class BasePage {
   protected readonly page: Page;
@@ -26,7 +27,7 @@ export class BasePage {
     action = 'click'
   ): Promise<void> {
     try {
-      await locator.click({ timeout: 3000 });
+      await locator.click({ timeout: aiConfig.locatorTimeoutMs});
     } catch (error) {
       if (!this.testInfo) {
         throw error;
@@ -80,9 +81,12 @@ export class BasePage {
       );
 
       // Only retry high-confidence suggestions.
-      if (healingResult.confidence < 0.9) {
+      if (
+  healingResult.confidence <
+  aiConfig.healingConfidenceThreshold
+) {
         console.log(
-          `\nHealing skipped because confidence ${healingResult.confidence} is below threshold 0.9.\n`
+          `\nHealing skipped because confidence ${healingResult.confidence} is below threshold ${aiConfig.healingConfidenceThreshold}`
         );
 
         throw error;
@@ -96,7 +100,7 @@ export class BasePage {
       console.log('\nHigh-confidence healing accepted. Retrying...\n');
 
       try {
-        await healedLocator.click({ timeout: 3000 });
+        await healedLocator.click({ timeout: aiConfig.locatorTimeoutMs });
 
         if (classification) {
           writeHealingAudit(

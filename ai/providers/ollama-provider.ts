@@ -1,5 +1,6 @@
 import { FailureContext } from '../failure-context/failure-context';
 import { HealingResult } from '../healing/healing-result';
+import { aiConfig } from '../../config/ai-config';
 
 interface OllamaResponse {
   response: string;
@@ -45,13 +46,13 @@ Failure context:
 ${JSON.stringify(context, null, 2)}
 `;
 
-  const response = await fetch('http://localhost:11434/api/generate', {
+  const response = await fetch(aiConfig.ollamaUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'gemma3:4b',
+    model: aiConfig.model,
       prompt,
       stream: false,
 
