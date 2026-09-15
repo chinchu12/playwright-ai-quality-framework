@@ -143,6 +143,131 @@ export class BasePage {
     }
   }
 
+
+  async safeFill(
+  locator: Locator,
+  locatorDescription: string,
+  value: string,
+  action = 'fill'
+): Promise<void> {
+  try {
+    await locator.fill(value, {
+      timeout: aiConfig.locatorTimeoutMs,
+    });
+  } catch (error) {
+    if (!this.testInfo) {
+      throw error;
+    }
+
+    const context: FailureContext = await collectFailureContext(
+      this.page,
+      this.testInfo,
+      error as Error,
+      locatorDescription,
+      action
+    );
+
+    console.log(
+      '\nCaptured failure context:\n',
+      JSON.stringify(context, null, 2)
+    );
+
+    const classification = await classifyFailure(context);
+
+    if (classification) {
+      console.log(
+        '\nFailure classification:\n',
+        JSON.stringify(classification, null, 2)
+      );
+    }
+
+    const healingResult = await suggestHealing(context);
+
+    if (!healingResult) {
+      console.log('\nNo healing suggestion was returned.\n');
+      throw error;
+    }
+
+    if (
+      context.locator &&
+      context.locator.includes(`name: '${healingResult.name}'`)
+    ) {
+      console.log(
+        '\nHealing rejected because AI returned the same broken locator.\n'
+      );
+
+      throw error;
+    }
+
+    console.log(
+      '\nHealing suggestion:\n',
+      JSON.stringify(healingResult, null, 2)
+    );
+
+    if (
+      healingResult.confidence <
+      aiConfig.healingConfidenceThreshold
+    ) {
+      console.log(
+        `\nHealing skipped because confidence ${healingResult.confidence} is below threshold ${aiConfig.healingConfidenceThreshold}.\n`
+      );
+
+      throw error;
+    }
+
+    const healedLocator = resolveHealingLocator(
+      this.page,
+      healingResult
+    );
+
+    console.log('\nHigh-confidence healing accepted. Retrying fill...\n');
+
+    try {
+      await healedLocator.fill(value, {
+        timeout: aiConfig.locatorTimeoutMs,
+      });
+
+      if (classification) {
+        writeHealingAudit(
+          context,
+          classification,
+          healingResult,
+          true
+        );
+
+        writeIncidentReport(
+          context,
+          classification,
+          healingResult,
+          true
+        );
+      }
+
+      console.log('\nSelf-healing fill succeeded.\n');
+    } catch (healingError) {
+      if (classification) {
+        writeHealingAudit(
+          context,
+          classification,
+          healingResult,
+          false
+        );
+
+        writeIncidentReport(
+          context,
+          classification,
+          healingResult,
+          false
+        );
+      }
+
+      console.log('\nSelf-healing fill failed.\n');
+
+      throw healingError;
+    }
+  }
+}
+
   async fill(locator: Locator, value: string): Promise<void> {
     await locator.fill(value);
   }
