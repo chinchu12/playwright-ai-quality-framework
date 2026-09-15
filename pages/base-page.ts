@@ -5,6 +5,7 @@ import { suggestHealing } from '../ai/healing/healing-engine';
 import { resolveHealingLocator } from '../ai/healing/locator-resolver';
 import { writeHealingAudit } from '../ai/reporting/healing-audit';
 import { classifyFailure } from '../ai/analysis/failure-classifier';
+import { writeIncidentReport } from '../ai/reporting/incident-reporter';
 
 export class BasePage {
   protected readonly page: Page;
@@ -61,8 +62,7 @@ export class BasePage {
       }
 
       // Safety rule:
-      // Reject a healing suggestion that returns
-      // the same accessible name as the failed locator.
+      // Reject suggestions that return the same broken locator name.
       if (
         context.locator &&
         context.locator.includes(`name: '${healingResult.name}'`)
@@ -79,7 +79,7 @@ export class BasePage {
         JSON.stringify(healingResult, null, 2)
       );
 
-      // Only retry high-confidence AI suggestions.
+      // Only retry high-confidence suggestions.
       if (healingResult.confidence < 0.9) {
         console.log(
           `\nHealing skipped because confidence ${healingResult.confidence} is below threshold 0.9.\n`
@@ -105,12 +105,26 @@ export class BasePage {
             healingResult,
             true
           );
+
+          writeIncidentReport(
+            context,
+            classification,
+            healingResult,
+            true
+          );
         }
 
         console.log('\nSelf-healing succeeded.\n');
       } catch (healingError) {
         if (classification) {
           writeHealingAudit(
+            context,
+            classification,
+            healingResult,
+            false
+          );
+
+          writeIncidentReport(
             context,
             classification,
             healingResult,
