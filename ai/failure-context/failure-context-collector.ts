@@ -52,6 +52,9 @@ export async function collectFailureContext(
             const role =
               element.getAttribute('role');
 
+            const testId =
+  element.getAttribute('data-testid');  
+
             const type =
               'type' in inputElement && inputElement.type
                 ? inputElement.type
@@ -79,6 +82,7 @@ export async function collectFailureContext(
               type,
               placeholder,
               associatedLabel,
+              testId,
               href,
             };
           })

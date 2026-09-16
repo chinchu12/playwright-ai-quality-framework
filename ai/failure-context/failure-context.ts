@@ -8,6 +8,7 @@ export interface InteractiveElement {
   type: string | null;
   placeholder: string | null;
   associatedLabel: string | null;
+  testId: string | null;
   href: string | null;
 }
 

@@ -18,7 +18,7 @@ export interface HealingAuditEntry {
 
   healedLocator: {
     strategy: string;
-    role: string;
+    role?: string;
     name: string;
   };
 

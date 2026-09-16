@@ -1,5 +1,8 @@
 import { FailureContext } from '../failure-context/failure-context';
-import { HealingResult } from '../healing/healing-result';
+import {
+  HealingResult,
+  HealingStrategy,
+} from '../healing/healing-result';
 import { aiConfig } from '../../config/ai-config';
 
 interface OllamaResponse {
@@ -9,7 +12,6 @@ interface OllamaResponse {
 export async function getHealingSuggestionFromOllama(
   context: FailureContext
 ): Promise<HealingResult | null> {
-
   if (!aiConfig.enabled) {
     console.log(
       '\nAI healing skipped because AI_HEALING_ENABLED=false.\n'
@@ -17,64 +19,147 @@ export async function getHealingSuggestionFromOllama(
 
     return null;
   }
+
   const prompt = `
 You are a senior Playwright QA automation engineer.
 
 A Playwright locator failed.
 
-Choose the best replacement element using ONLY the supplied
+Choose the best replacement locator using ONLY the supplied
 interactiveElements.
 
-IMPORTANT:
-You must return a usable Playwright role locator.
+Allowed locator strategies:
 
-For the "name" field use this priority:
+1. role
+   Example:
+   page.getByRole('button', { name: 'Submit' })
 
-1. ariaLabel
-2. associatedLabel
-3. visible text
-4. placeholder
+2. label
+   Example:
+   page.getByLabel('Email address')
+
+3. placeholder
+   Example:
+   page.getByPlaceholder('Search catalogue')
+
+4. testId
+   Example:
+   page.getByTestId('login-button')
+
+5. css
+   Example:
+   page.locator('#product-search')
+
+Strategy priority:
+
+1. role
+2. label
+3. placeholder
+4. testId
+5. css
+
+Prefer semantic Playwright locators over CSS.
+
+For the "name" field:
+
+- role:
+  use the accessible name
+
+- label:
+  use associatedLabel
+
+- placeholder:
+  use placeholder
+
+- testId:
+  use data-testid
+
+- css:
+  use a CSS selector based on captured evidence such as id
 
 For input elements:
-- use role "textbox" when type is text, email, search, tel, url, or password
-- if ariaLabel exists, use the ariaLabel as the locator name
-- do not return null for name
 
-Example:
+- text, email, search, tel, url and password inputs normally use role "textbox"
+- checkbox inputs use role "checkbox"
+- radio inputs use role "radio"
+- if ariaLabel exists and role strategy is appropriate, prefer ariaLabel
+- associatedLabel is preferred for label strategy
+- placeholder is preferred for placeholder strategy
 
-Interactive element:
+ACTION COMPATIBILITY RULES:
 
-{
-  "tag": "input",
-  "ariaLabel": "Product search",
-  "associatedLabel": "Find a product",
-  "placeholder": "Search catalogue"
-}
+- For action "fill":
+  only choose input, textarea, select, textbox, or combobox elements.
+  Never choose buttons or links.
 
-Correct result:
+- For action "click":
+  prefer buttons, links, checkboxes, radio buttons, and other clickable elements.
 
-{
-  "strategy": "role",
-  "role": "textbox",
-  "name": "Product search"
-}
+- The replacement candidate must support the failed Playwright action.
 
-Rules:
+- If action is "fill" and an input has ariaLabel, associatedLabel, or placeholder,
+  choose that input instead of a nearby button with similar text.
+
+Important rules:
 
 1. Never invent an element.
-2. Never invent an accessible name.
-3. Never return null or an empty string for "name".
-4. The proposed name must exist in interactiveElements.
-5. Prefer ariaLabel whenever it is available.
-6. Do not reuse the failed accessible name unless it exists in the DOM evidence.
-7. Match the semantic role of the failed action whenever possible.
-8. input -> textbox
-9. button -> button
-10. anchor -> link
+2. Never invent locator evidence.
+3. Use only values found in interactiveElements.
+4. Do not reuse the failed locator unless evidence proves it is valid.
+5. Prefer semantic strategies over CSS.
+6. Use CSS only as a last resort.
+7. For role strategy, "role" is mandatory and must contain the exact Playwright role.
+8. Never return strategy "role" without a role value.
+9. For non-role strategies, "role" may be omitted.
+10. "name" must never be null or empty.
 11. confidence must be between 0 and 1.
-12. Use confidence >= 0.90 only when the DOM evidence strongly supports the candidate.
-13. Return JSON only.
-14. Do not include markdown.
+12. Use confidence >= 0.90 only when evidence strongly supports the locator.
+13. If no reliable replacement exists, return confidence below 0.90.
+14. Return JSON only.
+15. Do not include markdown.
+
+Examples:
+
+ROLE:
+
+{
+  "originalLocator": "getByRole('link', { name: 'More details' })",
+  "strategy": "role",
+  "role": "link",
+  "name": "Learn more",
+  "confidence": 0.98,
+  "reason": "The captured anchor element has visible text Learn more."
+}
+
+LABEL:
+
+{
+  "originalLocator": "getByRole('textbox', { name: 'Username' })",
+  "strategy": "label",
+  "name": "Email address",
+  "confidence": 0.96,
+  "reason": "The input is associated with the label Email address."
+}
+
+PLACEHOLDER:
+
+{
+  "originalLocator": "getByRole('textbox', { name: 'Search' })",
+  "strategy": "placeholder",
+  "name": "Search catalogue",
+  "confidence": 0.94,
+  "reason": "The input has the placeholder Search catalogue."
+}
+
+CSS:
+
+{
+  "originalLocator": "getByRole('textbox', { name: 'Search' })",
+  "strategy": "css",
+  "name": "#product-search",
+  "confidence": 0.90,
+  "reason": "No stronger semantic locator was available, but the captured id is product-search."
+}
 
 Failure context:
 
@@ -105,11 +190,17 @@ ${JSON.stringify(context, null, 2)}
 
             strategy: {
               type: 'string',
-              enum: ['role'],
+              enum: [
+                'role',
+                'label',
+                'placeholder',
+                'testId',
+                'css',
+              ],
             },
 
             role: {
-              type: 'string',
+              type: ['string', 'null'],
             },
 
             name: {
@@ -125,13 +216,13 @@ ${JSON.stringify(context, null, 2)}
 
             reason: {
               type: 'string',
+              minLength: 1,
             },
           },
 
           required: [
             'originalLocator',
             'strategy',
-            'role',
             'name',
             'confidence',
             'reason',
@@ -203,11 +294,18 @@ ${JSON.stringify(context, null, 2)}
       cleanedResponse
     ) as HealingResult;
 
+    const validStrategies: HealingStrategy[] = [
+      'role',
+      'label',
+      'placeholder',
+      'testId',
+      'css',
+    ];
+
     if (
       !healingResult.originalLocator ||
-      healingResult.strategy !== 'role' ||
+      !validStrategies.includes(healingResult.strategy) ||
       !healingResult.name ||
-      !healingResult.role ||
       typeof healingResult.confidence !== 'number' ||
       healingResult.confidence < 0 ||
       healingResult.confidence > 1 ||
@@ -221,28 +319,262 @@ ${JSON.stringify(context, null, 2)}
       return null;
     }
 
-    const validNames = context.interactiveElements
-      .flatMap((element) => [
-        element.ariaLabel,
-        element.associatedLabel,
-        element.text,
-        element.placeholder,
-      ])
-      .filter(
-        (value): value is string =>
-          typeof value === 'string' &&
-          value.trim().length > 0
+    if (
+      healingResult.strategy === 'role' &&
+      !healingResult.role
+    ) {
+      let matchingElement =
+        context.interactiveElements.find((element) =>
+          [
+            element.ariaLabel,
+            element.associatedLabel,
+            element.text,
+            element.placeholder,
+          ].some(
+            (value) =>
+              value?.trim().toLowerCase() ===
+              healingResult.name.trim().toLowerCase()
+          )
+        );
+
+      // Deterministic fallback:
+      // infer original Playwright role from the failed locator.
+      if (!matchingElement && context.locator) {
+        const roleMatch = context.locator.match(
+          /getByRole\(['"]([^'"]+)['"]/
+        );
+
+        const originalRole = roleMatch?.[1];
+
+        if (originalRole) {
+          const compatibleElements =
+            context.interactiveElements.filter((element) => {
+              switch (originalRole) {
+                case 'link':
+                  return element.tag === 'a';
+
+                case 'button':
+                  return (
+                    element.tag === 'button' ||
+                    element.type === 'button' ||
+                    element.type === 'submit'
+                  );
+
+                case 'textbox':
+                  return (
+                    element.tag === 'textarea' ||
+                    (
+                      element.tag === 'input' &&
+                      ![
+                        'checkbox',
+                        'radio',
+                        'button',
+                        'submit',
+                        'reset',
+                      ].includes(element.type ?? '')
+                    )
+                  );
+
+                case 'checkbox':
+                  return (
+                    element.tag === 'input' &&
+                    element.type === 'checkbox'
+                  );
+
+                case 'radio':
+                  return (
+                    element.tag === 'input' &&
+                    element.type === 'radio'
+                  );
+
+                case 'combobox':
+                  return element.tag === 'select';
+
+                default:
+                  return element.role === originalRole;
+              }
+            });
+
+          if (compatibleElements.length === 1) {
+            matchingElement = compatibleElements[0];
+
+            const fallbackName =
+              matchingElement.ariaLabel ??
+              matchingElement.associatedLabel ??
+              matchingElement.text ??
+              matchingElement.placeholder;
+
+            if (fallbackName) {
+              healingResult.name = fallbackName;
+
+              console.log(
+                `\nAI name replaced with deterministic DOM candidate "${fallbackName}".\n`
+              );
+            }
+          }
+        }
+      }
+
+      if (!matchingElement) {
+        console.error(
+          '\nHealing rejected: role strategy has no role and no reliable matching DOM element was found.\n'
+        );
+
+        return null;
+      }
+
+      // Action compatibility guardrail.
+      if (context.action === 'fill') {
+        const fillableTags = [
+          'input',
+          'textarea',
+          'select',
+        ];
+
+        const isFillable =
+          fillableTags.includes(matchingElement.tag) ||
+          matchingElement.role === 'textbox' ||
+          matchingElement.role === 'combobox';
+
+        if (!isFillable) {
+          console.error(
+            `\nHealing rejected: "${healingResult.name}" is not compatible with action "fill".\n`
+          );
+
+          return null;
+        }
+      }
+
+      switch (matchingElement.tag) {
+        case 'a':
+          healingResult.role = 'link';
+          break;
+
+        case 'button':
+          healingResult.role = 'button';
+          break;
+
+        case 'textarea':
+          healingResult.role = 'textbox';
+          break;
+
+        case 'select':
+          healingResult.role = 'combobox';
+          break;
+
+        case 'input': {
+          switch (matchingElement.type) {
+            case 'checkbox':
+              healingResult.role = 'checkbox';
+              break;
+
+            case 'radio':
+              healingResult.role = 'radio';
+              break;
+
+            case 'button':
+            case 'submit':
+            case 'reset':
+              healingResult.role = 'button';
+              break;
+
+            default:
+              healingResult.role = 'textbox';
+          }
+
+          break;
+        }
+
+        default:
+          if (matchingElement.role) {
+            healingResult.role = matchingElement.role;
+          }
+      }
+
+      if (!healingResult.role) {
+        console.error(
+          '\nHealing rejected: unable to infer Playwright role from DOM evidence.\n'
+        );
+
+        return null;
+      }
+
+      console.log(
+        `\nRole "${healingResult.role}" inferred from DOM evidence.\n`
       );
+    }
 
-    const proposedNameExists = validNames.some(
-      (name) =>
-        name.trim().toLowerCase() ===
-        healingResult.name.trim().toLowerCase()
-    );
+    const normalizedName =
+      healingResult.name.trim().toLowerCase();
 
-    if (!proposedNameExists) {
+    let proposedValueExists = false;
+
+    switch (healingResult.strategy) {
+      case 'role':
+        proposedValueExists =
+          context.interactiveElements.some((element) =>
+            [
+              element.ariaLabel,
+              element.associatedLabel,
+              element.text,
+              element.placeholder,
+            ].some(
+              (value) =>
+                value?.trim().toLowerCase() ===
+                normalizedName
+            )
+          );
+        break;
+
+      case 'label':
+        proposedValueExists =
+          context.interactiveElements.some(
+            (element) =>
+              element.associatedLabel
+                ?.trim()
+                .toLowerCase() === normalizedName
+          );
+        break;
+
+      case 'placeholder':
+        proposedValueExists =
+          context.interactiveElements.some(
+            (element) =>
+              element.placeholder
+                ?.trim()
+                .toLowerCase() === normalizedName
+          );
+        break;
+
+      case 'testId':
+        proposedValueExists =
+          context.interactiveElements.some(
+            (element) =>
+              element.testId
+                ?.trim()
+                .toLowerCase() === normalizedName
+          );
+        break;
+
+      case 'css':
+        proposedValueExists =
+          context.interactiveElements.some((element) => {
+            if (!element.id) {
+              return false;
+            }
+
+            return (
+              `#${element.id}`
+                .trim()
+                .toLowerCase() === normalizedName
+            );
+          });
+        break;
+    }
+
+    if (!proposedValueExists) {
       console.error(
-        `\nHealing rejected: AI proposed name "${healingResult.name}" but it does not exist in captured DOM evidence.\n`
+        `\nHealing rejected: AI proposed ${healingResult.strategy} value "${healingResult.name}" but it does not exist in captured DOM evidence.\n`
       );
 
       return null;
