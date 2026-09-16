@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { PreferencesPage } from '../../pages/preferences-page';
 
 test.describe('Preferences Page', () => {
-  test('AI heals a broken checkbox locator', async ({ page }, testInfo) => {
+  test('AI heals a broken checkbox locator @ai-healing', async ({ page }, testInfo) => {
     const preferencesPage = new PreferencesPage(page, testInfo);
 
     await preferencesPage.open();
