@@ -12,6 +12,14 @@ interface OllamaResponse {
 export async function classifyFailure(
   context: FailureContext
 ): Promise<FailureClassification | null> {
+  if (!aiConfig.enabled) {
+    console.log(
+      '\nAI classification skipped because AI_HEALING_ENABLED=false.\n'
+    );
+
+    return null;
+  }
+
   const prompt = `
 You are a senior QA automation engineer.
 
@@ -76,69 +84,109 @@ Failure context:
 ${JSON.stringify(context, null, 2)}
 `;
 
-  const response = await fetch(aiConfig.ollamaUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+  let response: Response;
 
-    body: JSON.stringify({
-      model: aiConfig.model,
-      prompt,
-      stream: false,
+  try {
+    response = await fetch(aiConfig.ollamaUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
 
-      format: {
-        type: 'object',
+      body: JSON.stringify({
+        model: aiConfig.model,
+        prompt,
+        stream: false,
 
-        properties: {
-          category: {
-            type: 'string',
-            enum: [
-              'AUTOMATION_DEFECT',
-              'PRODUCT_DEFECT',
-              'ENVIRONMENT_FAILURE',
-              'TEST_DATA_FAILURE',
-              'FLAKY_TEST',
-              'UNKNOWN',
-            ],
+        format: {
+          type: 'object',
+
+          properties: {
+            category: {
+              type: 'string',
+              enum: [
+                'AUTOMATION_DEFECT',
+                'PRODUCT_DEFECT',
+                'ENVIRONMENT_FAILURE',
+                'TEST_DATA_FAILURE',
+                'FLAKY_TEST',
+                'UNKNOWN',
+              ],
+            },
+
+            confidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+            },
+
+            reason: {
+              type: 'string',
+              minLength: 1,
+            },
           },
 
-          confidence: {
-            type: 'number',
-            minimum: 0,
-            maximum: 1,
-          },
+          required: [
+            'category',
+            'confidence',
+            'reason',
+          ],
 
-          reason: {
-            type: 'string',
-            minLength: 1,
-          },
+          additionalProperties: false,
         },
 
-        required: [
-          'category',
-          'confidence',
-          'reason',
-        ],
-
-        additionalProperties: false,
-      },
-
-      options: {
-        temperature: 0,
-      },
-    }),
-  });
-
-  if (!response.ok) {
+        options: {
+          temperature: 0,
+        },
+      }),
+    });
+  } catch (error) {
     console.error(
-      `\nOllama classification request failed: ${response.status} ${response.statusText}\n`
+      '\nAI classification unavailable: could not connect to Ollama.\n'
+    );
+
+    console.error(
+      error instanceof Error
+        ? error.message
+        : error
     );
 
     return null;
   }
 
-  const data = (await response.json()) as OllamaResponse;
+  if (!response.ok) {
+    console.error(
+      `\nAI classification request failed: ${response.status} ${response.statusText}\n`
+    );
+
+    return null;
+  }
+
+  let data: OllamaResponse;
+
+  try {
+    data = (await response.json()) as OllamaResponse;
+  } catch (error) {
+    console.error(
+      '\nAI classification failed: Ollama returned an invalid HTTP response body.\n'
+    );
+
+    console.error(
+      error instanceof Error
+        ? error.message
+        : error
+    );
+
+    return null;
+  }
+
+  if (!data.response) {
+    console.error(
+      '\nAI classification failed: Ollama response did not contain generated content.\n'
+    );
+
+    return null;
+  }
 
   try {
     const cleanedResponse = data.response
@@ -181,7 +229,11 @@ ${JSON.stringify(context, null, 2)}
       data.response
     );
 
-    console.error(error);
+    console.error(
+      error instanceof Error
+        ? error.message
+        : error
+    );
 
     return null;
   }

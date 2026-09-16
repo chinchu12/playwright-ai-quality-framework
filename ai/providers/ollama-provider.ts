@@ -9,6 +9,14 @@ interface OllamaResponse {
 export async function getHealingSuggestionFromOllama(
   context: FailureContext
 ): Promise<HealingResult | null> {
+
+  if (!aiConfig.enabled) {
+    console.log(
+      '\nAI healing skipped because AI_HEALING_ENABLED=false.\n'
+    );
+
+    return null;
+  }
   const prompt = `
 You are a senior Playwright QA automation engineer.
 
@@ -73,75 +81,117 @@ Failure context:
 ${JSON.stringify(context, null, 2)}
 `;
 
-  const response = await fetch(aiConfig.ollamaUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+  let response: Response;
 
-    body: JSON.stringify({
-      model: aiConfig.model,
-      prompt,
-      stream: false,
+  try {
+    response = await fetch(aiConfig.ollamaUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
 
-      format: {
-        type: 'object',
+      body: JSON.stringify({
+        model: aiConfig.model,
+        prompt,
+        stream: false,
 
-        properties: {
-          originalLocator: {
-            type: 'string',
+        format: {
+          type: 'object',
+
+          properties: {
+            originalLocator: {
+              type: 'string',
+            },
+
+            strategy: {
+              type: 'string',
+              enum: ['role'],
+            },
+
+            role: {
+              type: 'string',
+            },
+
+            name: {
+              type: 'string',
+              minLength: 1,
+            },
+
+            confidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+            },
+
+            reason: {
+              type: 'string',
+            },
           },
 
-          strategy: {
-            type: 'string',
-            enum: ['role'],
-          },
+          required: [
+            'originalLocator',
+            'strategy',
+            'role',
+            'name',
+            'confidence',
+            'reason',
+          ],
 
-          role: {
-            type: 'string',
-          },
-
-          name: {
-            type: 'string',
-            minLength: 1,
-          },
-
-          confidence: {
-            type: 'number',
-            minimum: 0,
-            maximum: 1,
-          },
-
-          reason: {
-            type: 'string',
-          },
+          additionalProperties: false,
         },
 
-        required: [
-          'originalLocator',
-          'strategy',
-          'role',
-          'name',
-          'confidence',
-          'reason',
-        ],
-
-        additionalProperties: false,
-      },
-
-      options: {
-        temperature: 0,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Ollama request failed: ${response.status} ${response.statusText}`
+        options: {
+          temperature: 0,
+        },
+      }),
+    });
+  } catch (error) {
+    console.error(
+      '\nAI healing unavailable: could not connect to Ollama.\n'
     );
+
+    console.error(
+      error instanceof Error
+        ? error.message
+        : error
+    );
+
+    return null;
   }
 
-  const data = (await response.json()) as OllamaResponse;
+  if (!response.ok) {
+    console.error(
+      `\nAI healing request failed: ${response.status} ${response.statusText}\n`
+    );
+
+    return null;
+  }
+
+  let data: OllamaResponse;
+
+  try {
+    data = (await response.json()) as OllamaResponse;
+  } catch (error) {
+    console.error(
+      '\nAI healing failed: Ollama returned an invalid HTTP response body.\n'
+    );
+
+    console.error(
+      error instanceof Error
+        ? error.message
+        : error
+    );
+
+    return null;
+  }
+
+  if (!data.response) {
+    console.error(
+      '\nAI healing failed: Ollama response did not contain generated content.\n'
+    );
+
+    return null;
+  }
 
   try {
     const cleanedResponse = data.response
@@ -154,9 +204,14 @@ ${JSON.stringify(context, null, 2)}
     ) as HealingResult;
 
     if (
+      !healingResult.originalLocator ||
+      healingResult.strategy !== 'role' ||
       !healingResult.name ||
       !healingResult.role ||
-      typeof healingResult.confidence !== 'number'
+      typeof healingResult.confidence !== 'number' ||
+      healingResult.confidence < 0 ||
+      healingResult.confidence > 1 ||
+      !healingResult.reason
     ) {
       console.error(
         '\nIncomplete healing response:\n',
@@ -166,9 +221,6 @@ ${JSON.stringify(context, null, 2)}
       return null;
     }
 
-    // Guardrail:
-    // AI may only use a name that actually exists
-    // in the captured interactive DOM evidence.
     const validNames = context.interactiveElements
       .flatMap((element) => [
         element.ariaLabel,
@@ -199,11 +251,15 @@ ${JSON.stringify(context, null, 2)}
     return healingResult;
   } catch (error) {
     console.error(
-      '\nInvalid JSON returned by Ollama:\n',
+      '\nInvalid JSON returned by Ollama during healing:\n',
       data.response
     );
 
-    console.error(error);
+    console.error(
+      error instanceof Error
+        ? error.message
+        : error
+    );
 
     return null;
   }
